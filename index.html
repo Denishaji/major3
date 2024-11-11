@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Author Network Graph</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        .node {
+            cursor: pointer;
+            stroke: #fff;
+            stroke-width: 1.5px;
+        }
+
+        .link {
+            stroke: #999;
+            stroke-opacity: 0.6;
+        }
+
+        .tooltip {
+            position: absolute;
+            text-align: center;
+            padding: 8px;
+            font-size: 12px;
+            background: lightgray;
+            border: 1px solid #000;
+            border-radius: 5px;
+            pointer-events: none;
+            display: none;
+            z-index: 10;
+        }
+
+        .control-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: white;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            z-index: 100;
+        }
+
+        svg {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <div id="tooltip" class="tooltip"></div>
+    <div class="control-panel">
+        <label>Force Many-Body Strength:
+            <input type="range" id="chargeRange" min="-100" max="0" step="5" value="-60">
+        </label>
+        <br>
+        <label>Collision Radius:
+            <input type="range" id="collideRange" min="5" max="30" step="1" value="10">
+        </label>
+        <br>
+        <label>Link Strength:
+            <input type="range" id="linkStrengthRange" min="0" max="1" step="0.1" value="0.3">
+        </label>
+    </div>
+    <script>
+        d3.json("author_network_graph.json").then(function(graph) {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const sphereRadius = Math.min(width, height) / 2 - 150;
+
+            const svg = d3.select("body")
+                .append("svg")
+                .attr("width", width)
+                .attr("height", height);
+
+            const tooltip = d3.select("#tooltip");
+
+            // Define top 10 countries with distinct colors
+            const topCountries = ["Canada", "United States", "Italy", "Germany", "France", "Japan", "China", "Australia", "UK", "Netherlands"];
+            const colorScale = d3.scaleOrdinal()
+                .domain(topCountries)
+                .range(d3.schemeCategory10);
+
+            // Define scale for node size based on degree with d3.scaleSqrt
+            const nodeSizeScale = d3.scaleSqrt()
+                .domain([1, d3.max(graph.nodes, d => d.degree || 1)])
+                .range([3, 12]);
+
+            // Force simulation
+            const simulation = d3.forceSimulation(graph.nodes)
+                .force("link", d3.forceLink(graph.links).id(d => d.id).distance(30).strength(0.3))
+                .force("charge", d3.forceManyBody().strength(-60)) // Initial charge strength
+                .force("center", d3.forceCenter(centerX, centerY))
+                .force("collision", d3.forceCollide().radius(10)) // Initial collision radius
+                .force("radial", d3.forceRadial(sphereRadius, centerX, centerY).strength(0.1));
+
+            // Draw links
+            const link = svg.append("g")
+                .attr("class", "links")
+                .selectAll("line")
+                .data(graph.links)
+                .enter()
+                .append("line")
+                .attr("class", "link")
+                .style("stroke-width", 1.5);
+
+            // Draw nodes
+            const node = svg.append("g")
+                .attr("class", "nodes")
+                .selectAll("circle")
+                .data(graph.nodes)
+                .enter()
+                .append("circle")
+                .attr("class", "node")
+                .attr("r", d => nodeSizeScale(d.degree || 1))
+                .attr("fill", d => topCountries.includes(d.country) ? colorScale(d.country) : "#A9A9A9")
+                .style("opacity", 1)
+                .call(drag(simulation));
+
+            // Mouseover and mouseout events for node highlight
+            node.on("mouseover", function(event, d) {
+                    node.style("opacity", o => o.title === d.title ? 1 : 0.2);
+                    link.style("opacity", l => l.source.title === d.title && l.target.title === d.title ? 1 : 0.2);
+                })
+                .on("mouseout", function() {
+                    node.style("opacity", 1);
+                    link.style("opacity", 1);
+                })
+                .on("click", function(event, d) {
+                    tooltip.style("display", "block")
+                        .html(`Author: ${d.id}<br>Country: ${d.country}<br>Paper Title: ${d.title}<br>Year: ${d.year}`)
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY + 10) + "px");
+                });
+
+            // Hide tooltip on mouseout
+            node.on("mouseout.tooltip", function() {
+                tooltip.style("display", "none");
+            });
+
+            // Update simulation on each tick
+            simulation.on("tick", () => {
+                link.attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+
+                node.attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+            });
+
+            // UI controls for force parameters
+            d3.select("#chargeRange").on("input", function() {
+                simulation.force("charge").strength(+this.value);
+                simulation.alpha(1).restart();
+            });
+
+            d3.select("#collideRange").on("input", function() {
+                simulation.force("collision").radius(+this.value);
+                simulation.alpha(1).restart();
+            });
+
+            d3.select("#linkStrengthRange").on("input", function() {
+                simulation.force("link").strength(+this.value);
+                simulation.alpha(1).restart();
+            });
+
+            // Drag behavior for nodes
+            function drag(simulation) {
+                function dragstarted(event, d) {
+                    if (!event.active) simulation.alphaTarget(0.3).restart();
+                    d.fx = d.x;
+                    d.fy = d.y;
+                }
+
+                function dragged(event, d) {
+                    d.fx = event.x;
+                    d.fy = event.y;
+                }
+
+                function dragended(event, d) {
+                    if (!event.active) simulation.alphaTarget(0);
+                    d.fx = null;
+                    d.fy = null;
+                }
+
+                return d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended);
+            }
+        }).catch(function(error) {
+            console.error("Error loading JSON data:", error);
+        });
+    </script>
+</body>
+</html>
